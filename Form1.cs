@@ -1,19 +1,19 @@
 using System;
 using System.IO;
 using System.Text;
-using System.Text.Json; // for serialization
+using System.Text.Json; // For serialization
 using System.Windows.Forms;
 
 namespace ai_clipboard
 {
-    // Single-file approach (or partial) - no separate .Designer.cs in this example
     public class Form1 : Form
     {
+        // Where we store user preferences
         private const string ConfigPath = "userconfig.json";
 
         private Button selectFolderButton;
-        private TreeView fileTree;
         private Button copyButton;
+        private TreeView fileTree;
 
         public Form1()
         {
@@ -22,7 +22,9 @@ namespace ai_clipboard
             this.Width = 800;
             this.Height = 600;
 
-            // 1) "Select Folder" button
+            // =============== LAYOUT SETUP ===============
+
+            // 1) "Select Folder" button docked at TOP
             selectFolderButton = new Button
             {
                 Text = "Select Folder...",
@@ -32,23 +34,7 @@ namespace ai_clipboard
             selectFolderButton.Click += SelectFolderButton_Click!;
             this.Controls.Add(selectFolderButton);
 
-            // 2) Panel containing the TreeView, with top padding so it's not hidden
-            var treePanel = new Panel
-            {
-                Dock = DockStyle.Fill,
-                Padding = new Padding(0, 5, 0, 0) // top padding of 5px
-            };
-            this.Controls.Add(treePanel);
-
-            // 2b) TreeView for file listing
-            fileTree = new TreeView
-            {
-                Dock = DockStyle.Fill,
-                CheckBoxes = true
-            };
-            treePanel.Controls.Add(fileTree);
-
-            // 3) "Copy" button
+            // 2) "Copy Selected Files to Clipboard" button docked at BOTTOM
             copyButton = new Button
             {
                 Text = "Copy Selected Files to Clipboard",
@@ -58,12 +44,30 @@ namespace ai_clipboard
             copyButton.Click += CopyButton_Click!;
             this.Controls.Add(copyButton);
 
-            // Hook up events to load and save user settings
+            // 3) A Panel that fills the remaining space, with top & bottom padding
+            var treePanel = new Panel
+            {
+                Dock = DockStyle.Fill,
+                Padding = new Padding(0, 40, 0, 40) 
+                // ^ 40px on top, 40px on bottom. Increase/decrease as needed.
+            };
+            this.Controls.Add(treePanel);
+
+            // 4) The TreeView, docked "Fill" inside the panel
+            fileTree = new TreeView
+            {
+                Dock = DockStyle.Fill,
+                CheckBoxes = true
+            };
+            treePanel.Controls.Add(fileTree);
+
+            // Hook up events to load/save user settings
             this.Load += Form1_Load;
             this.FormClosing += Form1_FormClosing;
         }
 
-        // Fired when user clicks "Select Folder"
+        // =============== SELECT FOLDER LOGIC ===============
+
         private void SelectFolderButton_Click(object? sender, EventArgs e)
         {
             using var folderDialog = new FolderBrowserDialog
@@ -78,7 +82,7 @@ namespace ai_clipboard
                 // Recursively load the chosen folder
                 LoadDirectoryIntoTree(folderDialog.SelectedPath, fileTree.Nodes);
 
-                // Expand all so user can immediately see subnodes
+                // Expand all so user can see subnodes immediately
                 fileTree.ExpandAll();
             }
         }
@@ -88,8 +92,7 @@ namespace ai_clipboard
         {
             if (!Directory.Exists(path)) return;
 
-            // If path is a drive root like "C:\", Path.GetFileName(path) = "".
-            // We'll use a fallback if the name is empty.
+            // If path is "C:\", Path.GetFileName(...) is "", so fallback
             string folderName = Path.GetFileName(path);
             if (string.IsNullOrEmpty(folderName))
             {
@@ -106,22 +109,22 @@ namespace ai_clipboard
             // Add subdirectories
             try
             {
-                foreach (string directory in Directory.GetDirectories(path))
+                foreach (var directory in Directory.GetDirectories(path))
                 {
                     LoadDirectoryIntoTree(directory, dirNode.Nodes);
                 }
             }
             catch
             {
-                // Some dirs may be inaccessible. We ignore errors for brevity.
+                // Some dirs may be inaccessible. Ignore errors for brevity.
             }
 
             // Add files
             try
             {
-                foreach (string file in Directory.GetFiles(path))
+                foreach (var file in Directory.GetFiles(path))
                 {
-                    // We'll display just the file name in the tree
+                    // Display just the filename in the tree
                     string fileName = Path.GetFileName(file);
                     var fileNode = new TreeNode(fileName)
                     {
@@ -132,11 +135,12 @@ namespace ai_clipboard
             }
             catch
             {
-                // Ignore file access errors
+                // Ignore errors
             }
         }
 
-        // Fired when user clicks "Copy Selected Files to Clipboard"
+        // =============== COPY CHECKED FILES ===============
+
         private void CopyButton_Click(object? sender, EventArgs e)
         {
             var sb = new StringBuilder();
@@ -164,10 +168,9 @@ namespace ai_clipboard
             }
         }
 
-        // Helper: Recursively visit checked nodes and append text
+        // Recursively visit checked nodes and append their text
         private void CollectCheckedFiles(TreeNode node, StringBuilder sb)
         {
-            // If node is checked AND Tag is a file
             if (node.Checked && node.Tag is string filePath && File.Exists(filePath))
             {
                 try
@@ -189,9 +192,9 @@ namespace ai_clipboard
             }
         }
 
-        // ========= Persisting User Preferences =========
+        // =============== LOAD & SAVE USER CONFIG ===============
 
-        // 1. When the form loads, we read userconfig.json (if available) and restore
+        // 1. When the form loads, read userconfig.json (if available) and restore
         private void Form1_Load(object? sender, EventArgs e)
         {
             if (File.Exists(ConfigPath))
@@ -202,7 +205,6 @@ namespace ai_clipboard
                     var config = JsonSerializer.Deserialize<UserConfig>(json);
                     if (config != null && !string.IsNullOrEmpty(config.LastFolder))
                     {
-                        // If the last folder still exists, load it
                         if (Directory.Exists(config.LastFolder))
                         {
                             fileTree.Nodes.Clear();
@@ -219,18 +221,17 @@ namespace ai_clipboard
                 }
                 catch
                 {
-                    // Ignore errors for brevity
+                    // Ignore any errors loading config
                 }
             }
         }
 
-        // 2. When the form closes, we gather our current data and write to userconfig.json
+        // 2. When the form closes, gather current data and write to userconfig.json
         private void Form1_FormClosing(object? sender, FormClosingEventArgs e)
         {
             var config = new UserConfig();
 
-            // If there's at least one root node, let's store its path as the "last folder"
-            // (You could store multiple root nodes in config if you wanted.)
+            // If there's at least one root node, store its Tag as the last folder
             if (fileTree.Nodes.Count > 0 && fileTree.Nodes[0].Tag is string topPath)
             {
                 config.LastFolder = topPath;
@@ -239,11 +240,12 @@ namespace ai_clipboard
             // Gather a list of all checked files
             GatherCheckedFilesList(fileTree.Nodes, config.CheckedFiles);
 
-            // Write it out
+            // Write out the JSON
             try
             {
-                string json = JsonSerializer.Serialize(config,
-                    new JsonSerializerOptions { WriteIndented = true });
+                string json = JsonSerializer.Serialize(
+                    config, new JsonSerializerOptions { WriteIndented = true }
+                );
                 File.WriteAllText(ConfigPath, json);
             }
             catch
@@ -252,7 +254,6 @@ namespace ai_clipboard
             }
         }
 
-        // Recursively gather checked files from the tree
         private void GatherCheckedFilesList(TreeNodeCollection nodes, System.Collections.Generic.List<string> list)
         {
             foreach (TreeNode node in nodes)
@@ -265,7 +266,6 @@ namespace ai_clipboard
             }
         }
 
-        // Recursively apply the "checked" state if the file's path is in the user's config
         private void MarkCheckedFiles(TreeNodeCollection nodes, System.Collections.Generic.List<string> checkedPaths)
         {
             foreach (TreeNode node in nodes)

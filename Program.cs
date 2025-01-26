@@ -12,7 +12,6 @@ namespace ai_clipboard
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
 
-            // Run our single-file Form1
             Application.Run(new Form1());
         }
     }
