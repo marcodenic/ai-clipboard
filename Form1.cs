@@ -1,13 +1,16 @@
 using System;
 using System.IO;
 using System.Text;
+using System.Text.Json; // for serialization
 using System.Windows.Forms;
 
 namespace ai_clipboard
 {
-    // Single-file approach: no partial keyword, no .Designer.cs file
+    // Single-file approach (or partial) - no separate .Designer.cs in this example
     public class Form1 : Form
     {
+        private const string ConfigPath = "userconfig.json";
+
         private Button selectFolderButton;
         private TreeView fileTree;
         private Button copyButton;
@@ -26,17 +29,24 @@ namespace ai_clipboard
                 Dock = DockStyle.Top,
                 Height = 40
             };
-            // NOTE: using (object? sender, EventArgs e) to match nullability warnings
             selectFolderButton.Click += SelectFolderButton_Click!;
             this.Controls.Add(selectFolderButton);
 
-            // 2) TreeView for file listing
+            // 2) Panel containing the TreeView, with top padding so it's not hidden
+            var treePanel = new Panel
+            {
+                Dock = DockStyle.Fill,
+                Padding = new Padding(0, 5, 0, 0) // top padding of 5px
+            };
+            this.Controls.Add(treePanel);
+
+            // 2b) TreeView for file listing
             fileTree = new TreeView
             {
                 Dock = DockStyle.Fill,
                 CheckBoxes = true
             };
-            this.Controls.Add(fileTree);
+            treePanel.Controls.Add(fileTree);
 
             // 3) "Copy" button
             copyButton = new Button
@@ -47,6 +57,10 @@ namespace ai_clipboard
             };
             copyButton.Click += CopyButton_Click!;
             this.Controls.Add(copyButton);
+
+            // Hook up events to load and save user settings
+            this.Load += Form1_Load;
+            this.FormClosing += Form1_FormClosing;
         }
 
         // Fired when user clicks "Select Folder"
@@ -150,7 +164,7 @@ namespace ai_clipboard
             }
         }
 
-        // Helper: Recursively visit checked nodes
+        // Helper: Recursively visit checked nodes and append text
         private void CollectCheckedFiles(TreeNode node, StringBuilder sb)
         {
             // If node is checked AND Tag is a file
@@ -172,6 +186,95 @@ namespace ai_clipboard
             foreach (TreeNode child in node.Nodes)
             {
                 CollectCheckedFiles(child, sb);
+            }
+        }
+
+        // ========= Persisting User Preferences =========
+
+        // 1. When the form loads, we read userconfig.json (if available) and restore
+        private void Form1_Load(object? sender, EventArgs e)
+        {
+            if (File.Exists(ConfigPath))
+            {
+                try
+                {
+                    string json = File.ReadAllText(ConfigPath);
+                    var config = JsonSerializer.Deserialize<UserConfig>(json);
+                    if (config != null && !string.IsNullOrEmpty(config.LastFolder))
+                    {
+                        // If the last folder still exists, load it
+                        if (Directory.Exists(config.LastFolder))
+                        {
+                            fileTree.Nodes.Clear();
+                            LoadDirectoryIntoTree(config.LastFolder, fileTree.Nodes);
+                            fileTree.ExpandAll();
+
+                            // Mark the previously checked nodes
+                            if (config.CheckedFiles.Count > 0)
+                            {
+                                MarkCheckedFiles(fileTree.Nodes, config.CheckedFiles);
+                            }
+                        }
+                    }
+                }
+                catch
+                {
+                    // Ignore errors for brevity
+                }
+            }
+        }
+
+        // 2. When the form closes, we gather our current data and write to userconfig.json
+        private void Form1_FormClosing(object? sender, FormClosingEventArgs e)
+        {
+            var config = new UserConfig();
+
+            // If there's at least one root node, let's store its path as the "last folder"
+            // (You could store multiple root nodes in config if you wanted.)
+            if (fileTree.Nodes.Count > 0 && fileTree.Nodes[0].Tag is string topPath)
+            {
+                config.LastFolder = topPath;
+            }
+
+            // Gather a list of all checked files
+            GatherCheckedFilesList(fileTree.Nodes, config.CheckedFiles);
+
+            // Write it out
+            try
+            {
+                string json = JsonSerializer.Serialize(config,
+                    new JsonSerializerOptions { WriteIndented = true });
+                File.WriteAllText(ConfigPath, json);
+            }
+            catch
+            {
+                // Log or ignore
+            }
+        }
+
+        // Recursively gather checked files from the tree
+        private void GatherCheckedFilesList(TreeNodeCollection nodes, System.Collections.Generic.List<string> list)
+        {
+            foreach (TreeNode node in nodes)
+            {
+                if (node.Checked && node.Tag is string filePath && File.Exists(filePath))
+                {
+                    list.Add(filePath);
+                }
+                GatherCheckedFilesList(node.Nodes, list);
+            }
+        }
+
+        // Recursively apply the "checked" state if the file's path is in the user's config
+        private void MarkCheckedFiles(TreeNodeCollection nodes, System.Collections.Generic.List<string> checkedPaths)
+        {
+            foreach (TreeNode node in nodes)
+            {
+                if (node.Tag is string path && checkedPaths.Contains(path))
+                {
+                    node.Checked = true;
+                }
+                MarkCheckedFiles(node.Nodes, checkedPaths);
             }
         }
     }
