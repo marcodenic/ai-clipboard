@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Text.Json; // For serialization
 using System.Windows.Forms;
@@ -11,9 +12,27 @@ namespace ai_clipboard
         // Where we store user preferences
         private const string ConfigPath = "userconfig.json";
 
+        // A list of directories to skip
+        private static readonly string[] IgnoredDirectories = new string[]
+        {
+            ".git", "obj", "bin", "node_modules", ".github", ".next"
+        };
+
+        private FlowLayoutPanel topPanel;
         private Button selectFolderButton;
+        private Button resetButton;
+        private Button selectAllButton;
         private Button copyButton;
         private TreeView fileTree;
+
+        // We'll track the user-chosen root folder for relative paths
+        private string? selectedRootFolder = null;
+
+        // Use the fully qualified name so there's no ambiguity
+        private System.Windows.Forms.Timer? copyFeedbackTimer;
+
+        // For saving the original copy button text
+        private readonly string originalCopyButtonText;
 
         public Form1()
         {
@@ -22,19 +41,46 @@ namespace ai_clipboard
             this.Width = 800;
             this.Height = 600;
 
-            // =============== LAYOUT SETUP ===============
+            // =============== TOP PANEL (for multiple buttons) ===============
+            topPanel = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Top,
+                Height = 40,
+                FlowDirection = FlowDirection.LeftToRight
+            };
+            this.Controls.Add(topPanel);
 
-            // 1) "Select Folder" button docked at TOP
+            // 1) "Select Folder" button
             selectFolderButton = new Button
             {
                 Text = "Select Folder...",
-                Dock = DockStyle.Top,
-                Height = 40
+                Width = 120,
+                Height = 36
             };
             selectFolderButton.Click += SelectFolderButton_Click!;
-            this.Controls.Add(selectFolderButton);
+            topPanel.Controls.Add(selectFolderButton);
 
-            // 2) "Copy Selected Files to Clipboard" button docked at BOTTOM
+            // 2) "Reset Selections" button
+            resetButton = new Button
+            {
+                Text = "Reset Selections",
+                Width = 120,
+                Height = 36
+            };
+            resetButton.Click += ResetButton_Click!;
+            topPanel.Controls.Add(resetButton);
+
+            // 3) "Select All" button
+            selectAllButton = new Button
+            {
+                Text = "Select All",
+                Width = 120,
+                Height = 36
+            };
+            selectAllButton.Click += SelectAllButton_Click!;
+            topPanel.Controls.Add(selectAllButton);
+
+            // =============== "COPY" BUTTON (docked at bottom) ===============
             copyButton = new Button
             {
                 Text = "Copy Selected Files to Clipboard",
@@ -43,27 +89,30 @@ namespace ai_clipboard
             };
             copyButton.Click += CopyButton_Click!;
             this.Controls.Add(copyButton);
+            originalCopyButtonText = copyButton.Text;
 
-            // 3) A Panel that fills the remaining space, with top & bottom padding
+            // =============== MAIN PANEL (for the TreeView) ===============
             var treePanel = new Panel
             {
                 Dock = DockStyle.Fill,
-                Padding = new Padding(0, 40, 0, 40) 
-                // ^ 40px on top, 40px on bottom. Increase/decrease as needed.
+                // Provide top & bottom padding so top panel doesn't overlap
+                Padding = new Padding(0, 40, 0, 40)
             };
             this.Controls.Add(treePanel);
 
-            // 4) The TreeView, docked "Fill" inside the panel
+            // =============== TREEVIEW ===============
             fileTree = new TreeView
             {
                 Dock = DockStyle.Fill,
                 CheckBoxes = true
             };
+            // Hook up an event so if you check a folder node, it checks all children
+            fileTree.AfterCheck += FileTree_AfterCheck!;
             treePanel.Controls.Add(fileTree);
 
-            // Hook up events to load/save user settings
-            this.Load += Form1_Load;
-            this.FormClosing += Form1_FormClosing;
+            // =============== EVENTS FOR LOADING/SAVING USER SETTINGS ===============
+            this.Load += Form1_Load!;
+            this.FormClosing += Form1_FormClosing!;
         }
 
         // =============== SELECT FOLDER LOGIC ===============
@@ -79,11 +128,11 @@ namespace ai_clipboard
                 // Clear previous nodes
                 fileTree.Nodes.Clear();
 
-                // Recursively load the chosen folder
-                LoadDirectoryIntoTree(folderDialog.SelectedPath, fileTree.Nodes);
+                // Store the newly-selected root folder for relative paths
+                selectedRootFolder = folderDialog.SelectedPath;
 
-                // Expand all so user can see subnodes immediately
-                fileTree.ExpandAll();
+                // Recursively load the chosen folder
+                LoadDirectoryIntoTree(selectedRootFolder, fileTree.Nodes);
             }
         }
 
@@ -99,6 +148,12 @@ namespace ai_clipboard
                 folderName = path; // e.g. "C:\"
             }
 
+            // If the folder is in our ignored list, skip entirely
+            if (IgnoredDirectories.Contains(folderName, StringComparer.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
             // Create a node for the folder
             var dirNode = new TreeNode(folderName)
             {
@@ -107,9 +162,11 @@ namespace ai_clipboard
             parentNodes.Add(dirNode);
 
             // Add subdirectories
+            string[] subDirs = Array.Empty<string>();
             try
             {
-                foreach (var directory in Directory.GetDirectories(path))
+                subDirs = Directory.GetDirectories(path);
+                foreach (var directory in subDirs)
                 {
                     LoadDirectoryIntoTree(directory, dirNode.Nodes);
                 }
@@ -117,6 +174,13 @@ namespace ai_clipboard
             catch
             {
                 // Some dirs may be inaccessible. Ignore errors for brevity.
+            }
+
+            // Auto-expand only if the current folder has <= 10 subdirectories
+            // but STILL display them all, so the user can expand manually.
+            if (subDirs.Length <= 10)
+            {
+                dirNode.Expand();
             }
 
             // Add files
@@ -139,45 +203,85 @@ namespace ai_clipboard
             }
         }
 
+        // =============== TREEVIEW AFTER-CHECK (recursively check/uncheck children) ===============
+
+        private void FileTree_AfterCheck(object? sender, TreeViewEventArgs e)
+        {
+            // If the event was triggered programmatically (not user action), skip
+            if (e.Action == TreeViewAction.Unknown) return;
+            if (e.Node == null) return;
+
+            CheckAllChildren(e.Node, e.Node.Checked);
+        }
+
+        private void CheckAllChildren(TreeNode node, bool isChecked)
+        {
+            foreach (TreeNode child in node.Nodes)
+            {
+                child.Checked = isChecked;
+                CheckAllChildren(child, isChecked);
+            }
+        }
+
         // =============== COPY CHECKED FILES ===============
 
         private void CopyButton_Click(object? sender, EventArgs e)
         {
             var sb = new StringBuilder();
+            int fileCount = 0;
 
             // Recursively gather text from checked files
             foreach (TreeNode rootNode in fileTree.Nodes)
             {
-                CollectCheckedFiles(rootNode, sb);
+                fileCount += CollectCheckedFiles(rootNode, sb);
             }
 
-            if (sb.Length > 0)
+            if (fileCount > 0)
             {
                 Clipboard.SetText(sb.ToString());
-                MessageBox.Show("Selected file contents copied to clipboard!",
-                                "AI Clipboard",
-                                MessageBoxButtons.OK,
-                                MessageBoxIcon.Information);
+                ShowCopyFeedback("Files copied!");
             }
             else
             {
-                MessageBox.Show("No files were checked or no files found in the folder.",
-                                "AI Clipboard",
-                                MessageBoxButtons.OK,
-                                MessageBoxIcon.Information);
+                ShowCopyFeedback("No files copied.");
             }
         }
 
         // Recursively visit checked nodes and append their text
-        private void CollectCheckedFiles(TreeNode node, StringBuilder sb)
+        private int CollectCheckedFiles(TreeNode node, StringBuilder sb)
         {
+            int count = 0;
+
             if (node.Checked && node.Tag is string filePath && File.Exists(filePath))
             {
                 try
                 {
-                    sb.AppendLine($"========== {filePath} ==========");
+                    // We'll compute a path that includes the root folder name + relative
+                    // 1) Root folder's display name
+                    string rootName = Path.GetFileName(selectedRootFolder ?? "");
+                    if (string.IsNullOrEmpty(rootName))
+                    {
+                        // If it's empty (like "C:\"), fallback to the actual chosen folder
+                        rootName = selectedRootFolder ?? "";
+                    }
+
+                    // 2) Relative path from root
+                    string relativePart = filePath;
+                    if (!string.IsNullOrEmpty(selectedRootFolder))
+                    {
+                        relativePart = Path.GetRelativePath(selectedRootFolder, filePath);
+                    }
+
+                    // Construct a combined display path: e.g. "myProject\src\app\page.tsx"
+                    string displayPath = Path.Combine(rootName, relativePart);
+
+                    // Use "### START" and "### END" blocks for clearer segmentation
+                    sb.AppendLine($"### START {displayPath}");
                     sb.AppendLine(File.ReadAllText(filePath));
+                    sb.AppendLine($"### END {displayPath}");
                     sb.AppendLine();
+
+                    count++;
                 }
                 catch (Exception ex)
                 {
@@ -188,7 +292,61 @@ namespace ai_clipboard
             // Recurse children
             foreach (TreeNode child in node.Nodes)
             {
-                CollectCheckedFiles(child, sb);
+                count += CollectCheckedFiles(child, sb);
+            }
+
+            return count;
+        }
+
+        // Briefly change the copy button text, then revert to original
+        private void ShowCopyFeedback(string message)
+        {
+            copyButton.Text = message;
+
+            if (copyFeedbackTimer == null)
+            {
+                copyFeedbackTimer = new System.Windows.Forms.Timer
+                {
+                    Interval = 2000 // 2 seconds
+                };
+                copyFeedbackTimer.Tick += (s, e) =>
+                {
+                    copyButton.Text = originalCopyButtonText;
+                    copyFeedbackTimer.Stop();
+                };
+            }
+            copyFeedbackTimer.Start();
+        }
+
+        // =============== RESET SELECTIONS ===============
+
+        private void ResetButton_Click(object? sender, EventArgs e)
+        {
+            UncheckAllNodes(fileTree.Nodes);
+        }
+
+        private void UncheckAllNodes(TreeNodeCollection nodes)
+        {
+            foreach (TreeNode node in nodes)
+            {
+                node.Checked = false;
+                UncheckAllNodes(node.Nodes);
+            }
+        }
+
+        // =============== SELECT ALL ===============
+
+        private void SelectAllButton_Click(object? sender, EventArgs e)
+        {
+            CheckAllNodes(fileTree.Nodes);
+        }
+
+        private void CheckAllNodes(TreeNodeCollection nodes)
+        {
+            foreach (TreeNode node in nodes)
+            {
+                node.Checked = true;
+                CheckAllNodes(node.Nodes);
             }
         }
 
@@ -207,9 +365,11 @@ namespace ai_clipboard
                     {
                         if (Directory.Exists(config.LastFolder))
                         {
+                            // This is the root folder from the previous session
+                            selectedRootFolder = config.LastFolder;
+
                             fileTree.Nodes.Clear();
                             LoadDirectoryIntoTree(config.LastFolder, fileTree.Nodes);
-                            fileTree.ExpandAll();
 
                             // Mark the previously checked nodes
                             if (config.CheckedFiles.Count > 0)
