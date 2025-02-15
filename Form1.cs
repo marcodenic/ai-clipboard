@@ -18,6 +18,12 @@ namespace ai_clipboard
             ".git", "obj", "bin", "node_modules", ".github", ".next"
         };
 
+        // A list (or set) of image file extensions to skip
+        private static readonly string[] ImageExtensions = new string[]
+        {
+            ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".webp", ".svg"
+        };
+
         private FlowLayoutPanel topPanel;
         private Button selectFolderButton;
         private Button resetButton;
@@ -188,6 +194,14 @@ namespace ai_clipboard
             {
                 foreach (var file in Directory.GetFiles(path))
                 {
+                    // Check extension and skip if it's an image file
+                    string ext = Path.GetExtension(file).ToLowerInvariant();
+                    if (ImageExtensions.Contains(ext))
+                    {
+                        // Skip adding this file to the tree
+                        continue;
+                    }
+
                     // Display just the filename in the tree
                     string fileName = Path.GetFileName(file);
                     var fileNode = new TreeNode(fileName)
