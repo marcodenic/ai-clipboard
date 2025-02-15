@@ -1,4 +1,6 @@
 {
   "LastFolder": "",
-  "CheckedFiles": []
+  "CheckedFiles": [],
+  "IncludeBinaries": false,
+  "IgnorePatterns": []
 }

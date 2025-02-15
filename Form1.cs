@@ -12,33 +12,28 @@ namespace ai_clipboard
         // Where we store user preferences
         private const string ConfigPath = "userconfig.json";
 
-        // A list of directories to skip
-        private static readonly string[] IgnoredDirectories = new string[]
-        {
-            ".git", "obj", "bin", "node_modules", ".github", ".next"
-        };
+        // We'll track the user-chosen root folder for relative paths
+        private string? selectedRootFolder = null;
 
-        // A list (or set) of image file extensions to skip
-        private static readonly string[] ImageExtensions = new string[]
-        {
-            ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".webp", ".svg", ".ico", ".woff2"
-        };
+        // For saving the original copy button text
+        private readonly string originalCopyButtonText;
 
+        // A list of the top-level buttons/panels
         private FlowLayoutPanel topPanel;
         private Button selectFolderButton;
         private Button resetButton;
         private Button selectAllButton;
         private Button copyButton;
+        private Button optionsButton; // New "Options" button
+
+        // The main TreeView
         private TreeView fileTree;
 
-        // We'll track the user-chosen root folder for relative paths
-        private string? selectedRootFolder = null;
-
-        // Use the fully qualified name so there's no ambiguity
+        // Timer for “Files copied!” feedback
         private System.Windows.Forms.Timer? copyFeedbackTimer;
 
-        // For saving the original copy button text
-        private readonly string originalCopyButtonText;
+        // We'll keep a reference to the user's config once loaded
+        private UserConfig userConfig = new UserConfig();
 
         public Form1()
         {
@@ -86,6 +81,16 @@ namespace ai_clipboard
             selectAllButton.Click += SelectAllButton_Click!;
             topPanel.Controls.Add(selectAllButton);
 
+            // 4) New "Options" button
+            optionsButton = new Button
+            {
+                Text = "Options...",
+                Width = 120,
+                Height = 36
+            };
+            optionsButton.Click += OptionsButton_Click!;
+            topPanel.Controls.Add(optionsButton);
+
             // =============== "COPY" BUTTON (docked at bottom) ===============
             copyButton = new Button
             {
@@ -121,8 +126,78 @@ namespace ai_clipboard
             this.FormClosing += Form1_FormClosing!;
         }
 
-        // =============== SELECT FOLDER LOGIC ===============
+        // =============== FORM LOAD & SAVE ===============
+        private void Form1_Load(object? sender, EventArgs e)
+        {
+            // Attempt to load config from disk
+            if (File.Exists(ConfigPath))
+            {
+                try
+                {
+                    string json = File.ReadAllText(ConfigPath);
+                    var cfg = JsonSerializer.Deserialize<UserConfig>(json);
+                    if (cfg != null)
+                    {
+                        userConfig = cfg;
+                    }
+                }
+                catch
+                {
+                    // Ignore any errors loading config
+                }
+            }
 
+            // If the user config doesn't have any ignore patterns, fill with defaults
+            if (userConfig.IgnorePatterns == null || userConfig.IgnorePatterns.Count == 0)
+            {
+                userConfig.IgnorePatterns = UserConfig.GetDefaultIgnorePatterns();
+            }
+
+            // If no LastFolder or the folder doesn't exist, do nothing more
+            if (!string.IsNullOrEmpty(userConfig.LastFolder) && Directory.Exists(userConfig.LastFolder))
+            {
+                selectedRootFolder = userConfig.LastFolder;
+
+                // Load the folder tree
+                fileTree.Nodes.Clear();
+                LoadDirectoryIntoTree(selectedRootFolder, fileTree.Nodes);
+
+                // Mark the previously checked nodes
+                if (userConfig.CheckedFiles.Count > 0)
+                {
+                    MarkCheckedFiles(fileTree.Nodes, userConfig.CheckedFiles);
+                }
+            }
+        }
+
+        private void Form1_FormClosing(object? sender, FormClosingEventArgs e)
+        {
+            // If there's at least one root node, store its Tag as the last folder
+            // (we'll assume the first node is the selected folder root)
+            if (fileTree.Nodes.Count > 0 && fileTree.Nodes[0].Tag is string topPath)
+            {
+                userConfig.LastFolder = topPath;
+            }
+
+            // Gather a list of all checked files
+            userConfig.CheckedFiles.Clear();
+            GatherCheckedFilesList(fileTree.Nodes, userConfig.CheckedFiles);
+
+            // Write out the JSON
+            try
+            {
+                string json = JsonSerializer.Serialize(
+                    userConfig, new JsonSerializerOptions { WriteIndented = true }
+                );
+                File.WriteAllText(ConfigPath, json);
+            }
+            catch
+            {
+                // Log or ignore
+            }
+        }
+
+        // =============== SELECT FOLDER LOGIC ===============
         private void SelectFolderButton_Click(object? sender, EventArgs e)
         {
             using var folderDialog = new FolderBrowserDialog
@@ -142,7 +217,7 @@ namespace ai_clipboard
             }
         }
 
-        // Recursively load directories + files into the tree
+        // =============== LOAD DIRECTORY & FILES INTO TREE ===============
         private void LoadDirectoryIntoTree(string path, TreeNodeCollection parentNodes)
         {
             if (!Directory.Exists(path)) return;
@@ -154,8 +229,8 @@ namespace ai_clipboard
                 folderName = path; // e.g. "C:\"
             }
 
-            // If the folder is in our ignored list, skip entirely
-            if (IgnoredDirectories.Contains(folderName, StringComparer.OrdinalIgnoreCase))
+            // Check if we should ignore this directory
+            if (ShouldIgnoreDirectory(folderName, path))
             {
                 return;
             }
@@ -183,7 +258,6 @@ namespace ai_clipboard
             }
 
             // Auto-expand only if the current folder has <= 10 subdirectories
-            // but STILL display them all, so the user can expand manually.
             if (subDirs.Length <= 10)
             {
                 dirNode.Expand();
@@ -194,11 +268,15 @@ namespace ai_clipboard
             {
                 foreach (var file in Directory.GetFiles(path))
                 {
-                    // Check extension and skip if it's an image file
-                    string ext = Path.GetExtension(file).ToLowerInvariant();
-                    if (ImageExtensions.Contains(ext))
+                    // If the file is ignored by pattern, skip it
+                    if (ShouldIgnoreFile(file))
                     {
-                        // Skip adding this file to the tree
+                        continue;
+                    }
+
+                    // If user doesn't want binaries, skip if it's likely binary
+                    if (!userConfig.IncludeBinaries && !IsLikelyTextFile(file))
+                    {
                         continue;
                     }
 
@@ -217,8 +295,127 @@ namespace ai_clipboard
             }
         }
 
-        // =============== TREEVIEW AFTER-CHECK (recursively check/uncheck children) ===============
+        // =============== IGNORE CHECKS ===============
 
+        private bool ShouldIgnoreDirectory(string folderName, string fullPath)
+        {
+            // We'll match each ignore pattern. If a pattern appears to reference a directory
+            // (starts with "/" or includes a slash) and it matches, we skip it.
+            // This is simplistic "contains" logic; you can refine if needed.
+
+            if (userConfig.IgnorePatterns == null) return false;
+
+            // Convert backslashes to forward slashes for consistency
+            string pathForCheck = fullPath.Replace('\\', '/').ToLowerInvariant();
+
+            foreach (var pattern in userConfig.IgnorePatterns)
+            {
+                string p = pattern.Trim().ToLowerInvariant();
+
+                // If the pattern references a directory path (starts with "/" or includes a slash),
+                // we can do a simple "contains" check or "ends with" check. We'll do "contains" for demonstration.
+                if (p.StartsWith("/") || p.Contains("/"))
+                {
+                    // e.g. "/.git", "/node_modules"
+                    // We'll see if pathForCheck ends with or contains that pattern
+                    if (pathForCheck.Contains(p))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        private bool ShouldIgnoreFile(string filePath)
+        {
+            if (userConfig.IgnorePatterns == null) return false;
+
+            string lowerFile = filePath.Replace('\\', '/').ToLowerInvariant();
+            string fileName = Path.GetFileName(lowerFile);
+
+            foreach (var pattern in userConfig.IgnorePatterns)
+            {
+                string p = pattern.Trim().ToLowerInvariant();
+
+                // If the pattern has a slash, treat it as a substring check in the path
+                if (p.Contains("/"))
+                {
+                    // e.g. "package-lock.json" could appear without slash, or as "folder/package-lock.json".
+                    if (lowerFile.Contains(p))
+                    {
+                        return true;
+                    }
+                }
+                else
+                {
+                    // If no slash, treat it as a direct file name or extension.
+                    // Examples: ".png", ".jpg", "package-lock.json"
+                    if (fileName.EndsWith(p) || fileName.Equals(p))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        // =============== HELPER: DETERMINE IF A FILE IS LIKELY TEXT ===============
+        private bool IsLikelyTextFile(string filePath)
+        {
+            try
+            {
+                // Read up to 1024 bytes to test
+                using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read);
+                int length = (int)Math.Min(fs.Length, 1024);
+                byte[] buffer = new byte[length];
+
+                int readCount = fs.Read(buffer, 0, length);
+
+                // A simple heuristic: count how many bytes are "non-text"
+                // We'll say non-text if:
+                // 1) It's 0x00 (null)
+                // 2) It's < 32 (except tab=9, newline=10, carriage return=13)
+                // 3) It's > 126 (note: real UTF-8 can have bytes > 126, but we keep it simple)
+                int nonTextCount = 0;
+                for (int i = 0; i < readCount; i++)
+                {
+                    byte b = buffer[i];
+                    if (b == 0)
+                    {
+                        // Definitely binary-like
+                        return false;
+                    }
+                    bool isNormalTextChar =
+                        (b >= 32 && b <= 126) ||
+                        b == 9 ||
+                        b == 10 ||
+                        b == 13;
+                    if (!isNormalTextChar)
+                    {
+                        nonTextCount++;
+                    }
+                }
+
+                // If more than 20% of the bytes are "non-text," consider it binary
+                double ratio = (double)nonTextCount / readCount;
+                if (ratio > 0.20)
+                {
+                    return false;
+                }
+
+                return true;
+            }
+            catch
+            {
+                // If we can't read it for whatever reason, treat it as non-text
+                return false;
+            }
+        }
+
+        // =============== TREEVIEW AFTER-CHECK (recursively check/uncheck children) ===============
         private void FileTree_AfterCheck(object? sender, TreeViewEventArgs e)
         {
             // If the event was triggered programmatically (not user action), skip
@@ -238,7 +435,6 @@ namespace ai_clipboard
         }
 
         // =============== COPY CHECKED FILES ===============
-
         private void CopyButton_Click(object? sender, EventArgs e)
         {
             var sb = new StringBuilder();
@@ -261,7 +457,6 @@ namespace ai_clipboard
             }
         }
 
-        // Recursively visit checked nodes and append their text
         private int CollectCheckedFiles(TreeNode node, StringBuilder sb)
         {
             int count = 0;
@@ -312,7 +507,7 @@ namespace ai_clipboard
             return count;
         }
 
-        // Briefly change the copy button text, then revert to original
+        // A quick message on the copy button, which reverts after a small delay
         private void ShowCopyFeedback(string message)
         {
             copyButton.Text = message;
@@ -333,7 +528,6 @@ namespace ai_clipboard
         }
 
         // =============== RESET SELECTIONS ===============
-
         private void ResetButton_Click(object? sender, EventArgs e)
         {
             UncheckAllNodes(fileTree.Nodes);
@@ -349,7 +543,6 @@ namespace ai_clipboard
         }
 
         // =============== SELECT ALL ===============
-
         private void SelectAllButton_Click(object? sender, EventArgs e)
         {
             CheckAllNodes(fileTree.Nodes);
@@ -364,70 +557,23 @@ namespace ai_clipboard
             }
         }
 
-        // =============== LOAD & SAVE USER CONFIG ===============
-
-        // 1. When the form loads, read userconfig.json (if available) and restore
-        private void Form1_Load(object? sender, EventArgs e)
+        // =============== OPTIONS BUTTON CLICK ===============
+        private void OptionsButton_Click(object? sender, EventArgs e)
         {
-            if (File.Exists(ConfigPath))
+            using var form = new OptionsForm(userConfig);
+            if (form.ShowDialog() == DialogResult.OK)
             {
-                try
+                // The user may have changed IncludeBinaries or IgnorePatterns
+                // We refresh the tree if there's a selected folder
+                if (!string.IsNullOrEmpty(selectedRootFolder) && Directory.Exists(selectedRootFolder))
                 {
-                    string json = File.ReadAllText(ConfigPath);
-                    var config = JsonSerializer.Deserialize<UserConfig>(json);
-                    if (config != null && !string.IsNullOrEmpty(config.LastFolder))
-                    {
-                        if (Directory.Exists(config.LastFolder))
-                        {
-                            // This is the root folder from the previous session
-                            selectedRootFolder = config.LastFolder;
-
-                            fileTree.Nodes.Clear();
-                            LoadDirectoryIntoTree(config.LastFolder, fileTree.Nodes);
-
-                            // Mark the previously checked nodes
-                            if (config.CheckedFiles.Count > 0)
-                            {
-                                MarkCheckedFiles(fileTree.Nodes, config.CheckedFiles);
-                            }
-                        }
-                    }
-                }
-                catch
-                {
-                    // Ignore any errors loading config
+                    fileTree.Nodes.Clear();
+                    LoadDirectoryIntoTree(selectedRootFolder, fileTree.Nodes);
                 }
             }
         }
 
-        // 2. When the form closes, gather current data and write to userconfig.json
-        private void Form1_FormClosing(object? sender, FormClosingEventArgs e)
-        {
-            var config = new UserConfig();
-
-            // If there's at least one root node, store its Tag as the last folder
-            if (fileTree.Nodes.Count > 0 && fileTree.Nodes[0].Tag is string topPath)
-            {
-                config.LastFolder = topPath;
-            }
-
-            // Gather a list of all checked files
-            GatherCheckedFilesList(fileTree.Nodes, config.CheckedFiles);
-
-            // Write out the JSON
-            try
-            {
-                string json = JsonSerializer.Serialize(
-                    config, new JsonSerializerOptions { WriteIndented = true }
-                );
-                File.WriteAllText(ConfigPath, json);
-            }
-            catch
-            {
-                // Log or ignore
-            }
-        }
-
+        // =============== GATHER + MARK CHECKED FILES ===============
         private void GatherCheckedFilesList(TreeNodeCollection nodes, System.Collections.Generic.List<string> list)
         {
             foreach (TreeNode node in nodes)
