@@ -21,7 +21,7 @@ namespace ai_clipboard
         // A list (or set) of image file extensions to skip
         private static readonly string[] ImageExtensions = new string[]
         {
-            ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".webp", ".svg"
+            ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".webp", ".svg", ".ico", ".woff2"
         };
 
         private FlowLayoutPanel topPanel;
