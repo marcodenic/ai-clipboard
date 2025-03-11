@@ -25,6 +25,7 @@ namespace ai_clipboard
         private Button selectAllButton;
         private Button copyButton;
         private Button optionsButton; // New "Options" button
+        private Button refreshButton; // New "Refresh" button
 
         // The main TreeView
         private TreeView fileTree;
@@ -90,6 +91,16 @@ namespace ai_clipboard
             };
             optionsButton.Click += OptionsButton_Click!;
             topPanel.Controls.Add(optionsButton);
+
+            // 5) New "Refresh" button
+            refreshButton = new Button
+            {
+                Text = "Refresh",
+                Width = 120,
+                Height = 36
+            };
+            refreshButton.Click += RefreshButton_Click!;
+            topPanel.Controls.Add(refreshButton);
 
             // =============== "COPY" BUTTON (docked at bottom) ===============
             copyButton = new Button
@@ -570,6 +581,24 @@ namespace ai_clipboard
                     fileTree.Nodes.Clear();
                     LoadDirectoryIntoTree(selectedRootFolder, fileTree.Nodes);
                 }
+            }
+        }
+
+        // =============== REFRESH BUTTON CLICK ===============
+        private void RefreshButton_Click(object? sender, EventArgs e)
+        {
+            if (!string.IsNullOrEmpty(selectedRootFolder) && Directory.Exists(selectedRootFolder))
+            {
+                // Save the current checked files
+                var checkedFiles = new System.Collections.Generic.List<string>();
+                GatherCheckedFilesList(fileTree.Nodes, checkedFiles);
+
+                // Clear and reload the tree
+                fileTree.Nodes.Clear();
+                LoadDirectoryIntoTree(selectedRootFolder, fileTree.Nodes);
+
+                // Restore the checked files
+                MarkCheckedFiles(fileTree.Nodes, checkedFiles);
             }
         }
 
