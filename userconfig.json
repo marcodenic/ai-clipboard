@@ -2,6 +2,25 @@
   "LastFolder": "",
   "CheckedFiles": [],
   "IncludeBinaries": false,
-  "IgnorePatterns": [],
-  "PreviousProjects": []
+  "IgnorePatterns": [
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".bmp",
+    ".tif",
+    ".tiff",
+    ".webp",
+    ".svg",
+    ".ico",
+    ".woff2",
+    "/.git",
+    "/obj",
+    "/bin",
+    "/node_modules",
+    ".github",
+    "/.next",
+    "package-lock.json"
+  ],
+  "PreviousProjects": [""]
 }

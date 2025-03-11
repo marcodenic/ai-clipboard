@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Text.Json; // For serialization
 using System.Windows.Forms;
+using System.Drawing;   // For Font, Brushes, etc.
 
 namespace ai_clipboard
 {
@@ -19,13 +20,13 @@ namespace ai_clipboard
         private readonly string originalCopyButtonText;
 
         // A list of the top-level buttons/panels
-        private FlowLayoutPanel topPanel;
+        private TableLayoutPanel topPanel; // TableLayoutPanel for a 2-row layout
         private Button selectFolderButton;
         private Button resetButton;
         private Button selectAllButton;
         private Button copyButton;
-        private Button optionsButton; // New "Options" button
-        private Button refreshButton; // New "Refresh" button
+        private Button optionsButton;
+        private Button refreshButton;
 
         // The main TreeView
         private TreeView fileTree;
@@ -46,13 +47,30 @@ namespace ai_clipboard
             this.Width = 800;
             this.Height = 600;
 
-            // =============== TOP PANEL (for multiple buttons) ===============
-            topPanel = new FlowLayoutPanel
+            // =============== TOP PANEL (a TableLayoutPanel) ===============
+            topPanel = new TableLayoutPanel
             {
                 Dock = DockStyle.Top,
-                Height = 40,
-                FlowDirection = FlowDirection.LeftToRight
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                ColumnCount = 5,
+                RowCount = 2,
+                Padding = new Padding(0)
             };
+
+            // First row: 5 buttons
+            // Second row: the ComboBox
+            for (int i = 0; i < 5; i++)
+            {
+                // Each column is auto-size for the buttons
+                topPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            }
+
+            // First row: auto-size (buttons)
+            topPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            // Second row: fixed height for the ComboBox
+            topPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 44F));
+
             this.Controls.Add(topPanel);
 
             // 1) "Select Folder" button
@@ -60,60 +78,71 @@ namespace ai_clipboard
             {
                 Text = "Select Folder...",
                 Width = 120,
-                Height = 36
+                Height = 36,
+                Anchor = AnchorStyles.Left | AnchorStyles.Top
             };
             selectFolderButton.Click += SelectFolderButton_Click!;
-            topPanel.Controls.Add(selectFolderButton);
+            topPanel.Controls.Add(selectFolderButton, 0, 0);
 
             // 2) "Reset Selections" button
             resetButton = new Button
             {
                 Text = "Reset Selections",
                 Width = 120,
-                Height = 36
+                Height = 36,
+                Anchor = AnchorStyles.Left | AnchorStyles.Top
             };
             resetButton.Click += ResetButton_Click!;
-            topPanel.Controls.Add(resetButton);
+            topPanel.Controls.Add(resetButton, 1, 0);
 
             // 3) "Select All" button
             selectAllButton = new Button
             {
                 Text = "Select All",
                 Width = 120,
-                Height = 36
+                Height = 36,
+                Anchor = AnchorStyles.Left | AnchorStyles.Top
             };
             selectAllButton.Click += SelectAllButton_Click!;
-            topPanel.Controls.Add(selectAllButton);
+            topPanel.Controls.Add(selectAllButton, 2, 0);
 
-            // 4) New "Options" button
+            // 4) "Options" button
             optionsButton = new Button
             {
                 Text = "Options...",
                 Width = 120,
-                Height = 36
+                Height = 36,
+                Anchor = AnchorStyles.Left | AnchorStyles.Top
             };
             optionsButton.Click += OptionsButton_Click!;
-            topPanel.Controls.Add(optionsButton);
+            topPanel.Controls.Add(optionsButton, 3, 0);
 
-            // 5) New "Refresh" button
+            // 5) "Refresh" button
             refreshButton = new Button
             {
                 Text = "Refresh",
                 Width = 120,
-                Height = 36
+                Height = 36,
+                Anchor = AnchorStyles.Left | AnchorStyles.Top
             };
             refreshButton.Click += RefreshButton_Click!;
-            topPanel.Controls.Add(refreshButton);
+            topPanel.Controls.Add(refreshButton, 4, 0);
 
-            // =============== PROJECT HISTORY COMBOBOX ===============
+            // =============== PROJECT HISTORY COMBOBOX (second row) ===============
             projectHistoryComboBox = new ComboBox
             {
-                Width = 300,
-                Height = 36,
-                DropDownStyle = ComboBoxStyle.DropDownList
+                Dock = DockStyle.Fill,
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                DrawMode = DrawMode.OwnerDrawFixed,
+                IntegralHeight = false,
+                ItemHeight = 30  // Enough space for bold + path
             };
             projectHistoryComboBox.SelectedIndexChanged += ProjectHistoryComboBox_SelectedIndexChanged!;
-            topPanel.Controls.Add(projectHistoryComboBox);
+            projectHistoryComboBox.DrawItem += ProjectHistoryComboBox_DrawItem!;
+
+            // Place ComboBox in row=1, col=0, spanning 5 columns
+            topPanel.SetColumnSpan(projectHistoryComboBox, 5);
+            topPanel.Controls.Add(projectHistoryComboBox, 0, 1);
 
             // =============== "COPY" BUTTON (docked at bottom) ===============
             copyButton = new Button
@@ -130,8 +159,8 @@ namespace ai_clipboard
             var treePanel = new Panel
             {
                 Dock = DockStyle.Fill,
-                // Provide top & bottom padding so top panel doesn't overlap
-                Padding = new Padding(0, 40, 0, 40)
+                // Increased top padding so the root node isn't hidden
+                Padding = new Padding(0, 80, 0, 40)
             };
             this.Controls.Add(treePanel);
 
@@ -141,7 +170,6 @@ namespace ai_clipboard
                 Dock = DockStyle.Fill,
                 CheckBoxes = true
             };
-            // Hook up an event so if you check a folder node, it checks all children
             fileTree.AfterCheck += FileTree_AfterCheck!;
             treePanel.Controls.Add(fileTree);
 
@@ -180,19 +208,20 @@ namespace ai_clipboard
             // Load previously selected projects into ComboBox
             if (userConfig.PreviousProjects != null && userConfig.PreviousProjects.Count > 0)
             {
-                projectHistoryComboBox.Items.AddRange(userConfig.PreviousProjects.ToArray());
+                foreach (var projectPath in userConfig.PreviousProjects)
+                {
+                    projectHistoryComboBox.Items.Add(new ProjectItem(projectPath));
+                }
             }
 
-            // If no LastFolder or the folder doesn't exist, do nothing more
+            // If no LastFolder or doesn't exist, do nothing more
             if (!string.IsNullOrEmpty(userConfig.LastFolder) && Directory.Exists(userConfig.LastFolder))
             {
                 selectedRootFolder = userConfig.LastFolder;
 
-                // Load the folder tree
                 fileTree.Nodes.Clear();
                 LoadDirectoryIntoTree(selectedRootFolder, fileTree.Nodes);
 
-                // Mark the previously checked nodes
                 if (userConfig.CheckedFiles.Count > 0)
                 {
                     MarkCheckedFiles(fileTree.Nodes, userConfig.CheckedFiles);
@@ -203,7 +232,6 @@ namespace ai_clipboard
         private void Form1_FormClosing(object? sender, FormClosingEventArgs e)
         {
             // If there's at least one root node, store its Tag as the last folder
-            // (we'll assume the first node is the selected folder root)
             if (fileTree.Nodes.Count > 0 && fileTree.Nodes[0].Tag is string topPath)
             {
                 userConfig.LastFolder = topPath;
@@ -213,12 +241,14 @@ namespace ai_clipboard
             userConfig.CheckedFiles.Clear();
             GatherCheckedFilesList(fileTree.Nodes, userConfig.CheckedFiles);
 
-            // Save the list of previously selected projects
             if (userConfig.PreviousProjects == null)
             {
                 userConfig.PreviousProjects = new System.Collections.Generic.List<string>();
             }
-            if (!string.IsNullOrEmpty(userConfig.LastFolder) && !userConfig.PreviousProjects.Contains(userConfig.LastFolder))
+
+            // Add the last folder if not already in the list
+            if (!string.IsNullOrEmpty(userConfig.LastFolder) &&
+                !userConfig.PreviousProjects.Contains(userConfig.LastFolder))
             {
                 userConfig.PreviousProjects.Add(userConfig.LastFolder);
             }
@@ -246,13 +276,8 @@ namespace ai_clipboard
             };
             if (folderDialog.ShowDialog() == DialogResult.OK)
             {
-                // Clear previous nodes
                 fileTree.Nodes.Clear();
-
-                // Store the newly-selected root folder for relative paths
                 selectedRootFolder = folderDialog.SelectedPath;
-
-                // Recursively load the chosen folder
                 LoadDirectoryIntoTree(selectedRootFolder, fileTree.Nodes);
             }
         }
@@ -262,27 +287,20 @@ namespace ai_clipboard
         {
             if (!Directory.Exists(path)) return;
 
-            // If path is "C:\", Path.GetFileName(...) is "", so fallback
             string folderName = Path.GetFileName(path);
             if (string.IsNullOrEmpty(folderName))
             {
                 folderName = path; // e.g. "C:\"
             }
 
-            // Check if we should ignore this directory
             if (ShouldIgnoreDirectory(folderName, path))
             {
                 return;
             }
 
-            // Create a node for the folder
-            var dirNode = new TreeNode(folderName)
-            {
-                Tag = path
-            };
+            var dirNode = new TreeNode(folderName) { Tag = path };
             parentNodes.Add(dirNode);
 
-            // Add subdirectories
             string[] subDirs = Array.Empty<string>();
             try
             {
@@ -294,70 +312,52 @@ namespace ai_clipboard
             }
             catch
             {
-                // Some dirs may be inaccessible. Ignore errors for brevity.
+                // ignore
             }
 
-            // Auto-expand only if the current folder has <= 10 subdirectories
             if (subDirs.Length <= 10)
             {
                 dirNode.Expand();
             }
 
-            // Add files
             try
             {
                 foreach (var file in Directory.GetFiles(path))
                 {
-                    // If the file is ignored by pattern, skip it
                     if (ShouldIgnoreFile(file))
                     {
                         continue;
                     }
 
-                    // If user doesn't want binaries, skip if it's likely binary
                     if (!userConfig.IncludeBinaries && !IsLikelyTextFile(file))
                     {
                         continue;
                     }
 
-                    // Display just the filename in the tree
                     string fileName = Path.GetFileName(file);
-                    var fileNode = new TreeNode(fileName)
-                    {
-                        Tag = file
-                    };
+                    var fileNode = new TreeNode(fileName) { Tag = file };
                     dirNode.Nodes.Add(fileNode);
                 }
             }
             catch
             {
-                // Ignore errors
+                // ignore
             }
         }
 
         // =============== IGNORE CHECKS ===============
-
         private bool ShouldIgnoreDirectory(string folderName, string fullPath)
         {
-            // We'll match each ignore pattern. If a pattern appears to reference a directory
-            // (starts with "/" or includes a slash) and it matches, we skip it.
-            // This is simplistic "contains" logic; you can refine if needed.
-
             if (userConfig.IgnorePatterns == null) return false;
 
-            // Convert backslashes to forward slashes for consistency
             string pathForCheck = fullPath.Replace('\\', '/').ToLowerInvariant();
 
             foreach (var pattern in userConfig.IgnorePatterns)
             {
                 string p = pattern.Trim().ToLowerInvariant();
 
-                // If the pattern references a directory path (starts with "/" or includes a slash),
-                // we can do a simple "contains" check or "ends with" check. We'll do "contains" for demonstration.
                 if (p.StartsWith("/") || p.Contains("/"))
                 {
-                    // e.g. "/.git", "/node_modules"
-                    // We'll see if pathForCheck ends with or contains that pattern
                     if (pathForCheck.Contains(p))
                     {
                         return true;
@@ -379,10 +379,8 @@ namespace ai_clipboard
             {
                 string p = pattern.Trim().ToLowerInvariant();
 
-                // If the pattern has a slash, treat it as a substring check in the path
                 if (p.Contains("/"))
                 {
-                    // e.g. "package-lock.json" could appear without slash, or as "folder/package-lock.json".
                     if (lowerFile.Contains(p))
                     {
                         return true;
@@ -390,8 +388,6 @@ namespace ai_clipboard
                 }
                 else
                 {
-                    // If no slash, treat it as a direct file name or extension.
-                    // Examples: ".png", ".jpg", "package-lock.json"
                     if (fileName.EndsWith(p) || fileName.Equals(p))
                     {
                         return true;
@@ -407,50 +403,32 @@ namespace ai_clipboard
         {
             try
             {
-                // Read up to 1024 bytes to test
                 using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read);
                 int length = (int)Math.Min(fs.Length, 1024);
                 byte[] buffer = new byte[length];
 
                 int readCount = fs.Read(buffer, 0, length);
 
-                // A simple heuristic: count how many bytes are "non-text"
-                // We'll say non-text if:
-                // 1) It's 0x00 (null)
-                // 2) It's < 32 (except tab=9, newline=10, carriage return=13)
-                // 3) It's > 126 (note: real UTF-8 can have bytes > 126, but we keep it simple)
                 int nonTextCount = 0;
                 for (int i = 0; i < readCount; i++)
                 {
                     byte b = buffer[i];
-                    if (b == 0)
-                    {
-                        // Definitely binary-like
-                        return false;
-                    }
+                    if (b == 0) return false;
                     bool isNormalTextChar =
                         (b >= 32 && b <= 126) ||
-                        b == 9 ||
-                        b == 10 ||
-                        b == 13;
+                        b == 9 || b == 10 || b == 13;
                     if (!isNormalTextChar)
                     {
                         nonTextCount++;
                     }
                 }
 
-                // If more than 20% of the bytes are "non-text," consider it binary
                 double ratio = (double)nonTextCount / readCount;
-                if (ratio > 0.20)
-                {
-                    return false;
-                }
-
-                return true;
+                return ratio <= 0.20;
             }
             catch
             {
-                // If we can't read it for whatever reason, treat it as non-text
+                // If we can't read it, treat as non-text
                 return false;
             }
         }
@@ -458,7 +436,6 @@ namespace ai_clipboard
         // =============== TREEVIEW AFTER-CHECK (recursively check/uncheck children) ===============
         private void FileTree_AfterCheck(object? sender, TreeViewEventArgs e)
         {
-            // If the event was triggered programmatically (not user action), skip
             if (e.Action == TreeViewAction.Unknown) return;
             if (e.Node == null) return;
 
@@ -480,7 +457,6 @@ namespace ai_clipboard
             var sb = new StringBuilder();
             int fileCount = 0;
 
-            // Recursively gather text from checked files
             foreach (TreeNode rootNode in fileTree.Nodes)
             {
                 fileCount += CollectCheckedFiles(rootNode, sb);
@@ -505,26 +481,20 @@ namespace ai_clipboard
             {
                 try
                 {
-                    // We'll compute a path that includes the root folder name + relative
-                    // 1) Root folder's display name
                     string rootName = Path.GetFileName(selectedRootFolder ?? "");
                     if (string.IsNullOrEmpty(rootName))
                     {
-                        // If it's empty (like "C:\"), fallback to the actual chosen folder
                         rootName = selectedRootFolder ?? "";
                     }
 
-                    // 2) Relative path from root
                     string relativePart = filePath;
                     if (!string.IsNullOrEmpty(selectedRootFolder))
                     {
                         relativePart = Path.GetRelativePath(selectedRootFolder, filePath);
                     }
 
-                    // Construct a combined display path: e.g. "myProject\src\app\page.tsx"
                     string displayPath = Path.Combine(rootName, relativePart);
 
-                    // Use "### START" and "### END" blocks for clearer segmentation
                     sb.AppendLine($"### START {displayPath}");
                     sb.AppendLine(File.ReadAllText(filePath));
                     sb.AppendLine($"### END {displayPath}");
@@ -538,7 +508,6 @@ namespace ai_clipboard
                 }
             }
 
-            // Recurse children
             foreach (TreeNode child in node.Nodes)
             {
                 count += CollectCheckedFiles(child, sb);
@@ -547,7 +516,6 @@ namespace ai_clipboard
             return count;
         }
 
-        // A quick message on the copy button, which reverts after a small delay
         private void ShowCopyFeedback(string message)
         {
             copyButton.Text = message;
@@ -556,7 +524,7 @@ namespace ai_clipboard
             {
                 copyFeedbackTimer = new System.Windows.Forms.Timer
                 {
-                    Interval = 2000 // 2 seconds
+                    Interval = 2000
                 };
                 copyFeedbackTimer.Tick += (s, e) =>
                 {
@@ -603,8 +571,6 @@ namespace ai_clipboard
             using var form = new OptionsForm(userConfig);
             if (form.ShowDialog() == DialogResult.OK)
             {
-                // The user may have changed IncludeBinaries or IgnorePatterns
-                // We refresh the tree if there's a selected folder
                 if (!string.IsNullOrEmpty(selectedRootFolder) && Directory.Exists(selectedRootFolder))
                 {
                     fileTree.Nodes.Clear();
@@ -618,15 +584,12 @@ namespace ai_clipboard
         {
             if (!string.IsNullOrEmpty(selectedRootFolder) && Directory.Exists(selectedRootFolder))
             {
-                // Save the current checked files
                 var checkedFiles = new System.Collections.Generic.List<string>();
                 GatherCheckedFilesList(fileTree.Nodes, checkedFiles);
 
-                // Clear and reload the tree
                 fileTree.Nodes.Clear();
                 LoadDirectoryIntoTree(selectedRootFolder, fileTree.Nodes);
 
-                // Restore the checked files
                 MarkCheckedFiles(fileTree.Nodes, checkedFiles);
             }
         }
@@ -656,18 +619,88 @@ namespace ai_clipboard
             }
         }
 
+        // =============== OWNER-DRAW COMBOBOX ===============
+        private void ProjectHistoryComboBox_DrawItem(object? sender, DrawItemEventArgs e)
+        {
+            // If the event is out of range, bail
+            if (e.Index < 0) return;
+            // If the sender isn't a ComboBox, bail
+            if (sender is not ComboBox combo) return;
+            // If index is somehow outside the item range, bail
+            if (e.Index >= combo.Items.Count) return;
+
+            e.DrawBackground();
+
+            // Safely retrieve the item
+            var rawItem = combo.Items[e.Index];
+            if (rawItem is not ProjectItem item)
+            {
+                e.DrawFocusRectangle();
+                return;
+            }
+
+            // e.Font can be null, so we coalesce to a default
+            var usedFont = e.Font ?? SystemFonts.DefaultFont;
+            // Then create a bold font
+            using var boldFont = new Font(usedFont, FontStyle.Bold);
+
+            // Safely get the title/path strings
+            string title = item.ProjectName ?? "";
+            string path = item.ProjectPath ?? "";
+
+            // Align text vertically centered
+            var sf = new StringFormat
+            {
+                LineAlignment = StringAlignment.Center,
+                Alignment = StringAlignment.Near
+            };
+
+            // Measure the bold portion
+            var titleSize = e.Graphics.MeasureString(title, boldFont);
+
+            var titleRect = new RectangleF(e.Bounds.X, e.Bounds.Y, e.Bounds.Width, e.Bounds.Height);
+            e.Graphics.DrawString(title, boldFont, Brushes.Black, titleRect, sf);
+
+            float offsetX = e.Bounds.X + titleSize.Width;
+            var pathRect = new RectangleF(offsetX, e.Bounds.Y, e.Bounds.Width - offsetX, e.Bounds.Height);
+            e.Graphics.DrawString(" - " + path, usedFont, Brushes.Black, pathRect, sf);
+
+            e.DrawFocusRectangle();
+        }
+
         // =============== PROJECT HISTORY COMBOBOX SELECTION ===============
         private void ProjectHistoryComboBox_SelectedIndexChanged(object? sender, EventArgs e)
         {
-            if (projectHistoryComboBox.SelectedItem is string selectedProject && Directory.Exists(selectedProject))
+            if (projectHistoryComboBox.SelectedItem is ProjectItem selectedItem &&
+                Directory.Exists(selectedItem.ProjectPath))
             {
-                selectedRootFolder = selectedProject;
+                selectedRootFolder = selectedItem.ProjectPath;
 
-                // Clear previous nodes
                 fileTree.Nodes.Clear();
-
-                // Load the selected project folder
                 LoadDirectoryIntoTree(selectedRootFolder, fileTree.Nodes);
+            }
+        }
+
+        // =============== INTERNAL CLASS FOR COMBOBOX ITEMS ===============
+        private class ProjectItem
+        {
+            public string ProjectName { get; }
+            public string ProjectPath { get; }
+
+            public ProjectItem(string fullPath)
+            {
+                ProjectPath = fullPath;
+                string name = Path.GetFileName(fullPath.TrimEnd('\\', '/'));
+                if (string.IsNullOrEmpty(name))
+                {
+                    name = fullPath;
+                }
+                ProjectName = name;
+            }
+
+            public override string ToString()
+            {
+                return $"{ProjectName} - {ProjectPath}";
             }
         }
     }
