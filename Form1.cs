@@ -36,6 +36,9 @@ namespace ai_clipboard
         // We'll keep a reference to the user's config once loaded
         private UserConfig userConfig = new UserConfig();
 
+        // ComboBox for previously selected projects
+        private ComboBox projectHistoryComboBox;
+
         public Form1()
         {
             // Basic window setup
@@ -102,6 +105,16 @@ namespace ai_clipboard
             refreshButton.Click += RefreshButton_Click!;
             topPanel.Controls.Add(refreshButton);
 
+            // =============== PROJECT HISTORY COMBOBOX ===============
+            projectHistoryComboBox = new ComboBox
+            {
+                Width = 300,
+                Height = 36,
+                DropDownStyle = ComboBoxStyle.DropDownList
+            };
+            projectHistoryComboBox.SelectedIndexChanged += ProjectHistoryComboBox_SelectedIndexChanged!;
+            topPanel.Controls.Add(projectHistoryComboBox);
+
             // =============== "COPY" BUTTON (docked at bottom) ===============
             copyButton = new Button
             {
@@ -164,6 +177,12 @@ namespace ai_clipboard
                 userConfig.IgnorePatterns = UserConfig.GetDefaultIgnorePatterns();
             }
 
+            // Load previously selected projects into ComboBox
+            if (userConfig.PreviousProjects != null && userConfig.PreviousProjects.Count > 0)
+            {
+                projectHistoryComboBox.Items.AddRange(userConfig.PreviousProjects.ToArray());
+            }
+
             // If no LastFolder or the folder doesn't exist, do nothing more
             if (!string.IsNullOrEmpty(userConfig.LastFolder) && Directory.Exists(userConfig.LastFolder))
             {
@@ -193,6 +212,16 @@ namespace ai_clipboard
             // Gather a list of all checked files
             userConfig.CheckedFiles.Clear();
             GatherCheckedFilesList(fileTree.Nodes, userConfig.CheckedFiles);
+
+            // Save the list of previously selected projects
+            if (userConfig.PreviousProjects == null)
+            {
+                userConfig.PreviousProjects = new System.Collections.Generic.List<string>();
+            }
+            if (!string.IsNullOrEmpty(userConfig.LastFolder) && !userConfig.PreviousProjects.Contains(userConfig.LastFolder))
+            {
+                userConfig.PreviousProjects.Add(userConfig.LastFolder);
+            }
 
             // Write out the JSON
             try
@@ -624,6 +653,21 @@ namespace ai_clipboard
                     node.Checked = true;
                 }
                 MarkCheckedFiles(node.Nodes, checkedPaths);
+            }
+        }
+
+        // =============== PROJECT HISTORY COMBOBOX SELECTION ===============
+        private void ProjectHistoryComboBox_SelectedIndexChanged(object? sender, EventArgs e)
+        {
+            if (projectHistoryComboBox.SelectedItem is string selectedProject && Directory.Exists(selectedProject))
+            {
+                selectedRootFolder = selectedProject;
+
+                // Clear previous nodes
+                fileTree.Nodes.Clear();
+
+                // Load the selected project folder
+                LoadDirectoryIntoTree(selectedRootFolder, fileTree.Nodes);
             }
         }
     }
