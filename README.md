@@ -12,7 +12,7 @@ We hope this tool makes your life easier for quickly copying and sharing snippet
 
 ## Getting Started 🚀
 
-1.  git clone https://github.com/YOUR\_USERNAME/ai-clipboard.git
+1.  git clone https://github.com/marcodenic/ai-clipboard.git
 2.  **Open** the solution in Visual Studio or your favorite .NET IDE.
 3.  **Restore** NuGet packages (if needed).
 4.  **Build** the solution and **run** the ai-clipboard project.
