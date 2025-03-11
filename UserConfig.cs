@@ -12,6 +12,9 @@ namespace ai_clipboard
         public bool IncludeBinaries { get; set; } = false;  // default: false
         public List<string> IgnorePatterns { get; set; } = new();
 
+        // New field for previously selected projects
+        public List<string> PreviousProjects { get; set; } = new();
+
         // Helper to provide defaults for ignoring
         public static List<string> GetDefaultIgnorePatterns()
         {
